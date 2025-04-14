@@ -28,9 +28,11 @@ def fetch_news_google(company_name):
 
 def fetch_news_newsdata(company_name, keyword=None, months=None):
     base_url = "https://newsdata.io/api/1/news"
+    query = f"{company_name} {keyword}" if keyword else company_name
+
     params = {
         "apikey": NEWS_API_KEY,
-        "q": f"{company_name} {keyword}" if keyword else company_name,
+        "q": query,
         "language": "en",
         "country": "in"
     }
@@ -39,32 +41,35 @@ def fetch_news_newsdata(company_name, keyword=None, months=None):
         from_date = (datetime.datetime.now() - datetime.timedelta(days=int(months) * 30)).strftime("%Y-%m-%d")
         params["from_date"] = from_date
 
-    response = requests.get(base_url, params=params)
-
     results = []
+    page = 1
+    max_pages = 3  # Limit to avoid too many API calls
 
-    try:
-        data = response.json()  # Try parsing JSON
-    except Exception:
-        return [{
-            'title': 'Error: Unexpected response from Newsdata API',
-            'link': '',
-            'published': ''
-        }]
+    while page <= max_pages:
+        response = requests.get(base_url, params=params)
 
-    if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
-        for article in data["results"]:
-            results.append({
-                'title': article.get('title', 'No title'),
-                'link': article.get('link', ''),
-                'published': article.get('pubDate', '')
-            })
-    else:
-        results.append({
-            'title': 'No news found or API limit reached',
-            'link': '',
-            'published': ''
-        })
+        if 'application/json' not in response.headers.get('Content-Type', ''):
+            break  # Exit if invalid response
+
+        try:
+            data = response.json()
+        except Exception:
+            break
+
+        if "results" in data and isinstance(data["results"], list):
+            for article in data["results"]:
+                results.append({
+                    'title': article.get('title', 'No title'),
+                    'link': article.get('link', ''),
+                    'published': article.get('pubDate', '')
+                })
+
+        # Check for next page token
+        if data.get('nextPage'):
+            params['page'] = data['nextPage']
+            page += 1
+        else:
+            break
 
     return results
 
@@ -78,11 +83,20 @@ def get_news():
     if not company:
         return jsonify({'error': 'Company name is required'}), 400
 
-    # Smart decision: Newsdata.io if keyword or months provided
-    if keyword or months:
-        news = fetch_news_newsdata(company, keyword, months)
-    else:
+    # Try Newsdata.io first (fully optimized)
+    news = fetch_news_newsdata(company, keyword, months)
+
+    # If Newsdata.io fails or gives nothing → fallback to Google RSS
+    if not news:
         news = fetch_news_google(company)
+
+    # If both fail
+    if not news:
+        news = [{
+            'title': 'No relevant news found for your query',
+            'link': '',
+            'published': ''
+        }]
 
     return jsonify(news)
 
