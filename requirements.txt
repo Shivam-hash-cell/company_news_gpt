@@ -1,3 +1,5 @@
 Flask
 feedparser
 gunicorn
+python-dotenv
+requests

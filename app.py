@@ -1,31 +1,69 @@
 from flask import Flask, request, jsonify
 import feedparser
 import datetime
+import os
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
-def fetch_news(company_name, keyword=None, months=None):
+NEWS_API_KEY = os.getenv("NEWSDATA_API_KEY")
+
+
+def fetch_news_google(company_name):
     rss_url = f"https://news.google.com/rss/search?q={company_name.replace(' ', '+')}"
     feed = feedparser.parse(rss_url)
 
     results = []
-
     for entry in feed.entries:
-        # Keyword filter
-        if keyword and keyword.lower() not in entry.title.lower() and keyword.lower() not in entry.summary.lower():
-            continue
-
-        # Months filter
-        if months:
-            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                entry_date = datetime.datetime(*entry.published_parsed[:6])
-                if entry_date < datetime.datetime.now() - datetime.timedelta(days=int(months)*30):
-                    continue
-
         results.append({
             'title': entry.title,
             'link': entry.link,
             'published': entry.published
+        })
+    return results
+
+
+def fetch_news_newsdata(company_name, keyword=None, months=None):
+    base_url = "https://newsdata.io/api/1/news"
+    params = {
+        "apikey": NEWS_API_KEY,
+        "q": f"{company_name} {keyword}" if keyword else company_name,
+        "language": "en",
+        "country": "in"
+    }
+
+    if months:
+        from_date = (datetime.datetime.now() - datetime.timedelta(days=int(months) * 30)).strftime("%Y-%m-%d")
+        params["from_date"] = from_date
+
+    response = requests.get(base_url, params=params)
+
+    results = []
+
+    try:
+        data = response.json()  # Try parsing JSON
+    except Exception:
+        return [{
+            'title': 'Error: Unexpected response from Newsdata API',
+            'link': '',
+            'published': ''
+        }]
+
+    if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
+        for article in data["results"]:
+            results.append({
+                'title': article.get('title', 'No title'),
+                'link': article.get('link', ''),
+                'published': article.get('pubDate', '')
+            })
+    else:
+        results.append({
+            'title': 'No news found or API limit reached',
+            'link': '',
+            'published': ''
         })
 
     return results
@@ -40,7 +78,12 @@ def get_news():
     if not company:
         return jsonify({'error': 'Company name is required'}), 400
 
-    news = fetch_news(company, keyword, months)
+    # Smart decision: Newsdata.io if keyword or months provided
+    if keyword or months:
+        news = fetch_news_newsdata(company, keyword, months)
+    else:
+        news = fetch_news_google(company)
+
     return jsonify(news)
 
 
